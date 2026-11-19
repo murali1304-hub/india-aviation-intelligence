@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>India ATS Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:system-ui,sans-serif}
+body{display:flex;flex-direction:column}
+#bar{background:#0b1d3a;color:#fff;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px;z-index:1100}
+#bar b{white-space:nowrap}
+#bar input{padding:7px;border-radius:6px;border:0;min-width:0}
+#dep,#arr{width:70px;text-transform:uppercase}#rte{flex:1;min-width:140px;text-transform:uppercase}#q{width:150px}
+#bar button{padding:7px 11px;border:0;border-radius:6px;background:#ff9933;font-weight:700;cursor:pointer}
+#bar button.sec{background:#34507f;color:#fff}
+#wrap{flex:1;position:relative;min-height:0}#map{position:absolute;inset:0}
+#side{position:absolute;top:0;right:0;bottom:0;width:min(400px,100%);background:#fff;z-index:1050;overflow:auto;
+ box-shadow:-4px 0 18px #0004;display:none;padding:12px 14px;font-size:.9rem}
+#side h3{margin:12px 0 6px;font-size:1rem}#side h2{margin:0;font-size:1.1rem}
+#x{position:absolute;top:8px;right:10px;border:0;background:#eee;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:1rem}
+.wxbtn{padding:5px 10px;border:0;border-radius:6px;background:#1d70f5;color:#fff;font-weight:700;cursor:pointer;margin-top:6px}
+table{border-collapse:collapse;width:100%}td,th{padding:4px 6px;border-bottom:1px solid #e3e8f2;text-align:left;vertical-align:top}
+th{width:34%;color:#456;font-weight:600}
+.cat{display:inline-block;padding:2px 9px;border-radius:12px;color:#fff;font-weight:700;font-size:.8rem}
+.VFR{background:#2e9d4a}.MVFR{background:#1d70f5}.IFR{background:#d62828}.LIFR{background:#b5179e}
+pre{background:#f3f5fa;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:.8rem;margin:6px 0}
+.warn{background:#fff4e0;border-left:4px solid #ff9933;padding:6px 8px;margin:6px 0;font-size:.82rem}
+.err{color:#c00}.muted{color:#678;font-size:.8rem}
+.legs td{font-size:.82rem}.pt{font-weight:700}
+.rtlabel{background:#0b1d3a;color:#fff;border:0;font-weight:700;font-size:.72rem;padding:1px 5px}
+</style></head><body>
+<div id="bar">
+  <b>✈ ATS India</b>
+  <input id="dep" placeholder="DEP" value="VABB" maxlength="4">
+  <input id="rte" placeholder="Route e.g. BBB Q1 DPN" value="BBB Q1 DPN">
+  <input id="arr" placeholder="ARR" value="VIDP" maxlength="4">
+  <button id="plot">Plot route</button><button id="clr" class="sec">Clear</button>
+  <input id="q" placeholder="Search ICAO / ident ⏎">
+  <button id="out" class="sec">Logout</button>
+</div>
+<div id="wrap"><div id="map"></div><div id="side"><button id="x">✕</button><div id="sidebody"></div></div></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const token=localStorage.token;if(!token)location.href="/";
+const $=i=>document.getElementById(i);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const H={Authorization:"Bearer "+token};
+function logout(){localStorage.removeItem("token");location.href="/"}
+async function api(url){
+ const r=await fetch(url,{headers:H});
+ if(r.status===401){logout();throw new Error("Session expired")}
+ const d=await r.json().catch(()=>({}));
+ if(!r.ok)throw new Error(typeof d.detail==="string"?d.detail:"Request failed ("+r.status+")");
+ return d;
+}
+$("out").onclick=logout;
+$("x").onclick=()=>$("side").style.display="none";
+function openSide(html){$("sidebody").innerHTML=html;$("side").style.display="block";$("side").scrollTop=0}
+
+/* ---------- map ---------- */
+const map=L.map("map",{preferCanvas:true}).setView([22.5,79],5);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,attribution:"© OpenStreetMap"}).addTo(map);
+const lg={large:L.layerGroup(),medium:L.layerGroup(),small:L.layerGroup(),VOR:L.layerGroup(),NDB:L.layerGroup(),FIX:L.layerGroup()};
+const colors={large:"#d62828",medium:"#f77f00",small:"#6a994e",VOR:"#1d70f5",NDB:"#7b2cbf",FIX:"#444"};
+const index=[];
+const wpGroup=k=>k.startsWith("VOR")||k==="DME"||k==="TACAN"?"VOR":k.startsWith("NDB")?"NDB":"FIX";
+const wxButton=icao=>`<br><button class="wxbtn" data-wx="${esc(icao)}">☁ Weather ${esc(icao)}</button>`;
+
+api("/ats/geojson").then(g=>{
+ g.features.forEach(f=>{
+  const [lon,lat]=f.geometry.coordinates,p=f.properties;let m,grp,html;
+  if(p.layer==="airport"){
+   grp=lg[p.class];
+   m=L.circleMarker([lat,lon],{radius:p.class==="large"?7:p.class==="medium"?5:3,color:colors[p.class],fillOpacity:.8});
+   html=`<b>${esc(p.id)}${p.iata?" / "+esc(p.iata):""}</b><br>${esc(p.name)}<br>${esc(p.city||"")}<br>Elev: ${p.elev??"–"} ft<br>${lat.toFixed(4)}, ${lon.toFixed(4)}`+wxButton(p.id);
+  }else{
+   const g2=wpGroup(p.class);grp=lg[g2];
+   m=L.marker([lat,lon],{icon:L.divIcon({className:"",html:`<div style="width:9px;height:9px;transform:rotate(45deg);background:${colors[g2]};border:1px solid #fff"></div>`,iconSize:[9,9]})});
+   html=`<b>${esc(p.id)}</b> (${esc(p.class)})<br>${esc(p.name||"")}<br>${p.freq?(p.freq/1000)+" MHz<br>":""}${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  }
+  m.bindPopup(html);m.addTo(grp);index.push({id:p.id,iata:p.iata,name:p.name,ll:[lat,lon],m});
+ });
+ Object.values(lg).forEach(l=>l.addTo(map));
+ L.control.layers(null,{"Airports – Large":lg.large,"Airports – Medium":lg.medium,"Airports – Small":lg.small,
+  "VOR/DME":lg.VOR,"NDB":lg.NDB,"Fixes / RPs":lg.FIX},{collapsed:true}).addTo(map);
+}).catch(e=>alert(e.message));
+
+$("q").addEventListener("keydown",e=>{
+ if(e.key!=="Enter")return;const s=e.target.value.trim().toUpperCase();if(!s)return;
+ const hit=index.find(i=>i.id===s||i.iata===s)||index.find(i=>(i.name||"").toUpperCase().includes(s));
+ if(hit){map.setView(hit.ll,9);hit.m.openPopup()}else alert("Not found");
+});
+
+/* ---------- ATS route ---------- */
+const routeLayer=L.layerGroup().addTo(map);
+const STYLE={airway:{color:"#1d70f5",weight:4},direct:{color:"#555",weight:3,dashArray:"8 6"},"direct-missing":{color:"#e63946",weight:3,dashArray:"4 6"}};
+$("clr").onclick=()=>{routeLayer.clearLayers();$("side").style.display="none"};
+$("plot").onclick=plotRoute;
+[$("dep"),$("rte"),$("arr")].forEach(i=>i.addEventListener("keydown",e=>{if(e.key==="Enter")plotRoute()}));
+
+async function plotRoute(){
+ const txt=[$("dep").value,$("rte").value,$("arr").value].join(" ").trim();
+ try{
+  const r=await api("/route?route="+encodeURIComponent(txt));
+  routeLayer.clearLayers();
+  const ll=r.points.map(p=>[p.lat,p.lon]);
+  r.legs.forEach((l,i)=>{
+   const a=r.points[i],b=r.points[i+1];
+   L.polyline([[a.lat,a.lon],[b.lat,b.lon]],STYLE[l.mode]||STYLE.direct).addTo(routeLayer)
+    .bindTooltip(`${esc(l.from)} → ${esc(l.to)}${l.via?" via "+esc(l.via):" DCT"} · ${l.dist_nm} NM · ${l.course}°`,{sticky:true});
+  });
+  r.points.forEach(p=>{
+   const ap=p.kind==="AIRPORT";
+   const m=L.circleMarker([p.lat,p.lon],{radius:ap?8:5,color:"#0b1d3a",weight:2,fillColor:ap?"#ff9933":"#fff",fillOpacity:1}).addTo(routeLayer);
+   m.bindTooltip(esc(p.ident),{permanent:true,direction:"top",className:"rtlabel",offset:[0,-4]});
+   m.bindPopup(`<b>${esc(p.ident)}</b> ${esc(p.kind)}<br>${esc(p.name||"")}`+(ap?wxButton(p.ident):""));
+  });
+  map.fitBounds(ll,{padding:[50,50]});
+  showRoute(r,txt);
+ }catch(e){openSide(`<h2>Route</h2><div class="warn">${esc(e.message)}</div>`)}
+}
+
+function showRoute(r,txt){
+ const apBtns=r.airports.map(a=>`<button class="wxbtn" data-wx="${esc(a)}">☁ Weather ${esc(a)}</button>`).join(" ");
+ const rows=r.legs.map(l=>`<tr><td>${esc(l.from)} → ${esc(l.to)}</td><td>${l.via?esc(l.via):"DCT"}</td><td>${l.course}°</td><td>${l.dist_nm}</td></tr>`).join("");
+ openSide(`<h2>${esc(txt)}</h2>
+  <div class="muted">Total ${r.total_nm} NM (${Math.round(r.total_nm*1.852)} km) · true courses · blue = airway, grey dashed = direct, red dashed = airway data missing</div>
+  <p>${apBtns}</p>
+  ${r.warnings.map(w=>`<div class="warn">${esc(w)}</div>`).join("")}
+  <table class="legs"><tr><th>Leg</th><th>Via</th><th>Crs</th><th>NM</th></tr>${rows}</table>
+  <div id="wxbox"></div>`);
+}
+
+/* ---------- Weather ---------- */
+document.addEventListener("click",e=>{
+ const b=e.target.closest("[data-wx]");if(b)showWeather(b.dataset.wx);
+});
+
+async function showWeather(icao){
+ const boxHtml=h=>{const box=$("wxbox");if(box&&$("sidebody").querySelector(".legs"))box.innerHTML=h;else openSide(h)};
+ boxHtml(`<h3>☁ ${esc(icao)} weather</h3><div class="muted">Loading…</div>`);
+ try{
+  const w=await api("/weather/"+icao);
+  const m=w.metar,t=w.taf;let h=`<h3>☁ ${esc(icao)} aerodrome weather</h3>`;
+  (w.errors||[]).forEach(x=>h+=`<div class="warn">${esc(x)}</div>`);
+  if(!m&&!t&&!(w.errors||[]).length)h+=`<div class="warn">No METAR/TAF is currently published for ${esc(icao)}. Many small aerodromes do not issue reports.</div>`;
+  if(m){
+   h+=`<div><b>${esc(m.type)}</b> · ${esc(m.time_utc||"")} ${m.age_min!=null?`<span class="muted">(${m.age_min} min ago)</span>`:""}
+    ${m.flight_category?` <span class="cat ${m.flight_category}">${m.flight_category}</span>`:""}</div><pre>${esc(m.raw)}</pre>
+    <table>
+    <tr><th>Wind</th><td>${esc(m.wind?m.wind.text:"–")}</td></tr>
+    <tr><th>Visibility</th><td>${esc(m.visibility||"–")}</td></tr>
+    ${m.rvr.length?`<tr><th>RVR</th><td>${m.rvr.map(esc).join("<br>")}</td></tr>`:""}
+    <tr><th>Weather</th><td>${m.weather.length?m.weather.map(esc).join("<br>"):"None reported"}</td></tr>
+    <tr><th>Clouds</th><td>${m.clouds.length?m.clouds.map(esc).join("<br>"):"–"}</td></tr>
+    <tr><th>Temp / Dew point</th><td>${m.temp_c??"–"}°C / ${m.dewpoint_c??"–"}°C</td></tr>
+    <tr><th>QNH</th><td>${m.qnh_hpa?m.qnh_hpa+" hPa":"–"}${m.altimeter_inhg?` (${m.altimeter_inhg.toFixed(2)} inHg)`:""}</td></tr>
+    ${m.windshear.length?`<tr><th>Wind shear</th><td>${m.windshear.map(esc).join("<br>")}</td></tr>`:""}
+    ${m.trend.length?`<tr><th>Trend</th><td>${m.trend.map(esc).join("<br>")}</td></tr>`:""}
+    ${m.remarks?`<tr><th>Remarks</th><td>${esc(m.remarks)}</td></tr>`:""}
+    ${m.other.length?`<tr><th>Other groups</th><td>${m.other.map(esc).join(" ")}</td></tr>`:""}
+    </table>
+    <div class="muted">Flight category is computed from visibility and ceiling (FAA-style limits) – for awareness only.</div>`;
+  }
+  if(t){
+   h+=`<h3>TAF</h3><div class="muted">Issued ${esc(t.issued||"")} · Valid ${esc(t.valid||"")}${t.amended?" · AMENDED":""}</div><pre>${esc(t.raw)}</pre>`;
+   t.periods.forEach(p=>{
+    h+=`<table><tr><th colspan="2" style="background:#eef2fb">${esc(p.label)} ${p.flight_category?`<span class="cat ${p.flight_category}">${p.flight_category}</span>`:""}</th></tr>
+     ${p.wind?`<tr><th>Wind</th><td>${esc(p.wind)}</td></tr>`:""}
+     ${p.visibility?`<tr><th>Visibility</th><td>${esc(p.visibility)}</td></tr>`:""}
+     ${p.weather.length?`<tr><th>Weather</th><td>${p.weather.map(esc).join("<br>")}</td></tr>`:""}
+     ${p.clouds.length?`<tr><th>Clouds</th><td>${p.clouds.map(esc).join("<br>")}</td></tr>`:""}
+     ${p.other.length?`<tr><th>Other</th><td>${p.other.map(esc).join("<br>")}</td></tr>`:""}</table>`;
+   });
+  }
+  h+=`<div class="muted" style="margin-top:8px">Source: NOAA Aviation Weather Center. Not for operational use – always use official IMD / AAI briefing.</div>`;
+  boxHtml(h);
+ }catch(e){boxHtml(`<h3>☁ ${esc(icao)}</h3><div class="warn err">${esc(e.message)}</div>`)}
+}
+</script></body></html>

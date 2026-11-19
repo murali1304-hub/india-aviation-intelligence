@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>India Aviation Intelligence – Login</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#0b1d3a;color:#e8eefc}
+.card{width:min(380px,92vw);background:#13294f;padding:28px;border-radius:14px;box-shadow:0 10px 40px #0008}
+h1{font-size:1.2rem;margin:0 0 4px}p.sub{margin:0 0 18px;color:#8fa6d4;font-size:.85rem}
+input{width:100%;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #2c4a82;background:#0b1d3a;color:#fff;font-size:1rem}
+button{width:100%;padding:12px;margin-top:10px;border:0;border-radius:8px;background:#ff9933;color:#111;font-weight:700;font-size:1rem}
+a{color:#7fb0ff;cursor:pointer;font-size:.85rem}#msg{margin-top:10px;font-size:.85rem;min-height:1.2em;color:#ff8a8a}
+</style></head><body>
+<div class="card">
+  <h1>✈ India Aviation Intelligence</h1>
+  <p class="sub" id="sub">Sign in to continue</p>
+  <input id="email" type="email" placeholder="Email" style="display:none">
+  <input id="username" placeholder="Username (or email)" autocomplete="username">
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="go">Login</button>
+  <div style="margin-top:12px"><a id="toggle">New here? Create account</a></div>
+  <div id="msg"></div>
+</div>
+<script>
+let reg=false;const $=i=>document.getElementById(i);
+if(localStorage.token){location.href="map.html"}
+$("toggle").onclick=()=>{reg=!reg;$("email").style.display=reg?"block":"none";
+ $("go").textContent=reg?"Create account":"Login";$("sub").textContent=reg?"Create your account":"Sign in to continue";
+ $("toggle").textContent=reg?"Have an account? Login":"New here? Create account";$("msg").textContent=""};
+async function login(u,p){
+ const r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
+  body:new URLSearchParams({username:u,password:p})});
+ const d=await r.json();if(!r.ok)throw new Error(d.detail||"Login failed");
+ localStorage.token=d.access_token;location.href="map.html";}
+$("go").onclick=async()=>{
+ const u=$("username").value.trim(),p=$("password").value;$("msg").style.color="#ff8a8a";$("msg").textContent="";
+ try{
+  if(reg){
+   const r=await fetch("/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:u,email:$("email").value.trim(),password:p})});
+   const d=await r.json();
+   if(!r.ok)throw new Error(typeof d.detail==="string"?d.detail:d.detail[0].msg);
+  }
+  await login(u,p);
+ }catch(e){$("msg").textContent=e.message}};
+</script></body></html>
